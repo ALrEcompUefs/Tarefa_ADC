@@ -1,0 +1,4 @@
+[wokwi]
+version = 1
+firmware = 'build/ADC_Display.uf2'
+elf = 'ADC_Display.elf'
