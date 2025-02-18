@@ -16,8 +16,8 @@
 #define endereco 0x3C
 
 // paramêtros padrão para o joystick
-#define PADRAO_VRX 1890
-#define PADRAO_VRY 2050
+#define PADRAO_VRX 1900
+#define PADRAO_VRY 2000
 //valor máximo do contador - WRAP
 #define WRAP_PERIOD  4096
 //divisor do clock para o PWM 
@@ -30,7 +30,10 @@ const uint8_t VRX = 26, VRY=27;
 // Variavél para registro de tempo e controle de bounce da interrupção
 static volatile uint32_t tempo_anterior = 0;
 
-// variável de controle de leitura do adc
+//variável de controle da led
+static volatile bool ativa_led_G= false, ativa_pwm= true;
+static volatile bool tipo_de_borda = true;
+// variável de registro de leitura do adc
 static volatile uint16_t valor_x,valor_y;
 // Inicializa a estrutura do display
 ssd1306_t ssd; 
@@ -41,14 +44,15 @@ void inicializar_botoes();
 void inicializar_joystick();
 void leitura_adc();
 void obter_nivel_pwm();
-void atualizar_display(char msg);
+void atualizar_display();
 static void gpio_irq_handler(uint gpio, uint32_t events);
 void inicializar_display_oled();
 void pwm_setup(uint8_t PINO);
 void set_pwm_dc(uint16_t duty_cycle, uint8_t PINO);
-
+void posicionar_quadrado();
 int main()
 {
+    // Inicialização dos perifericos
     stdio_init_all();
     inicializar_leds();
     inicializar_botoes();
@@ -60,9 +64,12 @@ int main()
     gpio_set_irq_enabled_with_callback(BOTAO_A,GPIO_IRQ_EDGE_FALL,true,&gpio_irq_handler);
     gpio_set_irq_enabled_with_callback(BOTAO_B,GPIO_IRQ_EDGE_FALL,true,&gpio_irq_handler);
     gpio_set_irq_enabled_with_callback(BOTAO_JYK,GPIO_IRQ_EDGE_FALL,true,&gpio_irq_handler);
+
+    
     while (true) {
         leitura_adc();
         obter_nivel_pwm();
+        atualizar_display();
         printf("Leitura do Joystick!\n");
         printf("Eixo X:%d Eixo Y:%d\n",valor_x,valor_y);
         sleep_ms(1000);
@@ -75,10 +82,12 @@ int main()
 |   Configura os pinos da LED RGB como saída
 */
 void inicializar_leds(){
-    // led vermelha
+    // Configura as leds vermelha e azul como pwm
     pwm_setup(LED_R);
-    pwm_setup(LED_G);
     pwm_setup(LED_B);
+    // configura led verde como saída padrão
+    gpio_init(LED_G);
+    gpio_set_dir(LED_G,GPIO_OUT);
 }
 
 /*
@@ -145,14 +154,25 @@ static void gpio_irq_handler(uint gpio, uint32_t events){
         tempo_anterior= tempo_atual;
         // executa tratamento da interrupção
         if(gpio == BOTAO_A){
-            printf("teste\n");
+            printf("Troca estado da led PWM\n");
+            ativa_pwm = !ativa_pwm;
+            if(!ativa_pwm){
+                set_pwm_dc(0,LED_R);
+                set_pwm_dc(0,LED_B);
+            }
         }
         else if(gpio == BOTAO_B){
-            printf("teste2\n");
-        }
-        else if(gpio == BOTAO_JYK){
             printf("Modo bootsel\n");
             reset_usb_boot(0,0);
+        }
+        else if(gpio == BOTAO_JYK){
+            printf("Troca do estado da led verde:");
+            ativa_led_G = !ativa_led_G;
+            printf("Led em:%d\n",ativa_led_G);
+            gpio_put(LED_G,ativa_led_G);
+            // troca borda
+            tipo_de_borda= !tipo_de_borda;
+            atualizar_display();
         }
     }
 }
@@ -204,30 +224,90 @@ void leitura_adc(){
 */
 void obter_nivel_pwm(){
     // calcula nivel pwm com base no valor do joystick
-    if(valor_x == PADRAO_VRX){
+    uint16_t pwm_x,pwm_y;
+    if(valor_x >= PADRAO_VRX-200 && valor_x <= PADRAO_VRX+200){
         set_pwm_dc(0,LED_R);
     }
     else{
         // calcula o nivel
-        uint16_t aux;
-        valor_x > PADRAO_VRX? aux=valor_x-PADRAO_VRX:PADRAO_VRX-valor_x;
+        pwm_x = (valor_x>PADRAO_VRX)?valor_x-PADRAO_VRX:PADRAO_VRX-valor_x;
         // dobra o valor
-        aux=aux*2;
-        printf("PWM de X:%d\n",aux);
-        set_pwm_dc(aux,LED_R);
+        pwm_x=pwm_x*2;
+        //printf("PWM de X:%d\n",pwm_x);
+        
     }
 
-    if(valor_y == PADRAO_VRY){
+    if(valor_y >= PADRAO_VRY-200 && valor_x <= PADRAO_VRY+200){
         set_pwm_dc(0,LED_B);
     }
     else{
         // calcula o nivel
-        uint16_t aux;
-        valor_y > PADRAO_VRY? aux=valor_y-PADRAO_VRY:PADRAO_VRY-valor_y;
+        //valor_y > PADRAO_VRY? pwm_y=valor_y-PADRAO_VRY:PADRAO_VRY-valor_y;
+        pwm_y = (valor_y >PADRAO_VRY)? valor_y-PADRAO_VRY:PADRAO_VRY-valor_y;
         // dobra o valor
-        aux=aux*2;
-        printf("PWM de Y:%d\n",aux);
-        set_pwm_dc(aux,LED_B);
+        pwm_y=pwm_y*2;
+        //printf("PWM de Y:%d\n",pwm_y);
+        
+    }
+    if(ativa_pwm){
+        set_pwm_dc(pwm_x,LED_R);
+        set_pwm_dc(pwm_y,LED_B);
     }
     sleep_ms(500);
+}
+/*
+void atualizar_display(){
+    // limpa o display
+    ssd1306_fill(&ssd, false); // Limpa o display
+    if(tipo_de_borda){
+        // desenha borda com retangulo fino
+        ssd1306_rect(&ssd, 0, 0, 127, 60, true, false);
+    }
+    else{
+        // desenha borda com dois retangulos
+        ssd1306_rect(&ssd, 3, 3, 120, 60, true, false);
+        ssd1306_rect(&ssd, 6, 6, 115, 55, true, false);
+    }
+    int x_pos,y_pos;
+
+    x_pos = (valor_x-10)* ( (127-0)/ (4080-10));
+    y_pos = (valor_y-10)* ( (63-0)/ (4080-10));
+    printf("Coordenadas do quadrado\n");
+    printf("X:%f  Y:%f\n",x_pos,y_pos);
+    ssd1306_rect(&ssd,y_pos,x_pos,y_pos+8,x_pos+8,true,true);
+    //envia dados para o display
+    ssd1306_send_data(&ssd); // Atualiza o display
+}
+*/
+void atualizar_display(){
+    // limpa o display
+    ssd1306_fill(&ssd, false); // Limpa o display
+    if(tipo_de_borda){
+        // desenha borda com retangulo fino
+        ssd1306_rect(&ssd, 0, 0, 127, 60, true, false);
+    }
+    else{
+        // desenha borda com dois retangulos
+        ssd1306_rect(&ssd, 3, 3, 120, 60, true, false);
+        ssd1306_rect(&ssd, 6, 6, 115, 55, true, false);
+    }
+
+    float x_pos, y_pos;
+
+   
+    x_pos = (valor_x/4080.0)*119.0;
+    y_pos = (valor_y/4080.0)*55.0;
+
+    // fator de correção nas coordenadas
+    if(x_pos <=8)
+        x_pos+=8;
+    if(y_pos<=9)
+        y_pos+=8;
+    printf("Coordenadas do quadrado\n");
+    printf("X:%.2f  Y:%.2f\n", x_pos, y_pos);
+
+    ssd1306_rect(&ssd, (int)y_pos, (int)x_pos,8,8, true, true);
+    
+    // envia dados para o display
+    ssd1306_send_data(&ssd); // Atualiza o display
 }
