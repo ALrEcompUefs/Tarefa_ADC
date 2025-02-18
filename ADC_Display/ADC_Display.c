@@ -6,7 +6,8 @@
 #include "hardware/i2c.h"
 #include "inc/font.h"
 #include "string.h"
-
+#include "hardware/pwm.h"
+#include "hardware/adc.h"
 
 // definições para uso do display oled integrado
 #define I2C_PORT i2c1
@@ -14,21 +15,32 @@
 #define I2C_SCL 15
 #define endereco 0x3C
 
+// paramêtros padrão para o joystick
+#define PADRAO_VRX 1890
+#define PADRAO_VRY 2050
+//valor máximo do contador - WRAP
+#define WRAP_PERIOD  4096
+//divisor do clock para o PWM 
+#define PWM_DIVISER  25.4313151f 
+
 // Pinos dos perifericos
 const uint8_t LED_R=13, LED_B=12, LED_G=11;
 const uint8_t BOTAO_A=5,BOTAO_B=6,BOTAO_JYK=22;
-
+const uint8_t VRX = 26, VRY=27;
 // Variavél para registro de tempo e controle de bounce da interrupção
 static volatile uint32_t tempo_anterior = 0;
 
+// variável de controle de leitura do adc
+static volatile uint16_t valor_x,valor_y;
 // Inicializa a estrutura do display
 ssd1306_t ssd; 
-
 
 // protótipos de funções
 void inicializar_leds();
 void inicializar_botoes();
-void set_rgb(char cor,bool ativa);
+void inicializar_joystick();
+void leitura_adc();
+void obter_nivel_pwm();
 void atualizar_display(char msg);
 static void gpio_irq_handler(uint gpio, uint32_t events);
 void inicializar_display_oled();
@@ -38,9 +50,21 @@ void set_pwm_dc(uint16_t duty_cycle, uint8_t PINO);
 int main()
 {
     stdio_init_all();
+    inicializar_leds();
+    inicializar_botoes();
+    inicializar_joystick();
+    inicializar_display_oled();
+    adc_init();
 
+    // configura interrupções
+    gpio_set_irq_enabled_with_callback(BOTAO_A,GPIO_IRQ_EDGE_FALL,true,&gpio_irq_handler);
+    gpio_set_irq_enabled_with_callback(BOTAO_B,GPIO_IRQ_EDGE_FALL,true,&gpio_irq_handler);
+    gpio_set_irq_enabled_with_callback(BOTAO_JYK,GPIO_IRQ_EDGE_FALL,true,&gpio_irq_handler);
     while (true) {
-        printf("Hello, world!\n");
+        leitura_adc();
+        obter_nivel_pwm();
+        printf("Leitura do Joystick!\n");
+        printf("Eixo X:%d Eixo Y:%d\n",valor_x,valor_y);
         sleep_ms(1000);
     }
 }
@@ -52,14 +76,9 @@ int main()
 */
 void inicializar_leds(){
     // led vermelha
-    gpio_init(LED_R);
-    gpio_set_dir(LED_R,GPIO_OUT);
-    // led verde
-    gpio_init(LED_G);
-    gpio_set_dir(LED_G,GPIO_OUT);
-    // led azul
-    gpio_init(LED_B);
-    gpio_set_dir(LED_B,GPIO_OUT);
+    pwm_setup(LED_R);
+    pwm_setup(LED_G);
+    pwm_setup(LED_B);
 }
 
 /*
@@ -75,12 +94,18 @@ void inicializar_botoes(){
     gpio_init(BOTAO_B);
     gpio_set_dir(BOTAO_B,GPIO_IN);
     gpio_pull_up(BOTAO_B);
-    //botão C
+    
+}
+
+void inicializar_joystick(){
+    // Inicializa pinos do joystick como pinos do ADC
+    adc_gpio_init(VRX);
+    adc_gpio_init(VRY);
+    //botão do joystick
     gpio_init(BOTAO_JYK);
     gpio_set_dir(BOTAO_JYK,GPIO_IN);
     gpio_pull_up(BOTAO_JYK);
 }
-
 /*
 |   Função inicialzar display oled
 |   Configura e inicializa o display oled ssd1306 para sua utilização
@@ -120,15 +145,15 @@ static void gpio_irq_handler(uint gpio, uint32_t events){
         tempo_anterior= tempo_atual;
         // executa tratamento da interrupção
         if(gpio == BOTAO_A){
-            
+            printf("teste\n");
         }
         else if(gpio == BOTAO_B){
+            printf("teste2\n");
         }
         else if(gpio == BOTAO_JYK){
             printf("Modo bootsel\n");
             reset_usb_boot(0,0);
         }
-        atualizar_display('\0');
     }
 }
 
@@ -157,4 +182,52 @@ void pwm_setup(uint8_t PINO)
 void set_pwm_dc(uint16_t duty_cycle, uint8_t PINO){
     uint slice = pwm_gpio_to_slice_num(PINO);
     pwm_set_gpio_level(PINO, duty_cycle); //definir o cico de trabalho (duty cycle) do pwm
+}
+/*
+|
+|
+*/
+void leitura_adc(){
+    // leitura do canal 0- eixox do joystick
+    adc_select_input(0);
+    sleep_us(2);
+    valor_x=adc_read();
+    // leitura do canal 1- eixo y do joystick
+    adc_select_input(1);
+    sleep_us(2);
+    valor_y=adc_read();
+}
+
+/*
+|
+|
+*/
+void obter_nivel_pwm(){
+    // calcula nivel pwm com base no valor do joystick
+    if(valor_x == PADRAO_VRX){
+        set_pwm_dc(0,LED_R);
+    }
+    else{
+        // calcula o nivel
+        uint16_t aux;
+        valor_x > PADRAO_VRX? aux=valor_x-PADRAO_VRX:PADRAO_VRX-valor_x;
+        // dobra o valor
+        aux=aux*2;
+        printf("PWM de X:%d\n",aux);
+        set_pwm_dc(aux,LED_R);
+    }
+
+    if(valor_y == PADRAO_VRY){
+        set_pwm_dc(0,LED_B);
+    }
+    else{
+        // calcula o nivel
+        uint16_t aux;
+        valor_y > PADRAO_VRY? aux=valor_y-PADRAO_VRY:PADRAO_VRY-valor_y;
+        // dobra o valor
+        aux=aux*2;
+        printf("PWM de Y:%d\n",aux);
+        set_pwm_dc(aux,LED_B);
+    }
+    sleep_ms(500);
 }

@@ -57,6 +57,7 @@ target_include_directories(ADC_Display PRIVATE
 target_link_libraries(ADC_Display 
         hardware_i2c
         hardware_adc
+        hardware_pwm
         )
 
 pico_add_extra_outputs(ADC_Display)
